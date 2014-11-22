@@ -1,0 +1,52 @@
+import modules ;
+import feature : feature ;
+
+BOOST_ROOT = [ modules.peek : BOOST_ROOT ] ;
+
+use-project /torrent : ../libtorrent ;
+
+if $(BOOST_ROOT)
+{
+	use-project /boost : $(BOOST_ROOT) ;
+}
+
+feature disk-log : off on : composite propagated ;
+feature.compose <disk-log>on : <define>DISK_ACCESS_LOG ;
+
+lib dl : : <link>shared <name>dl ;
+
+SOURCES =
+	block_device
+	block_allocator
+	block_affinity
+	pool_allocator
+	;
+
+lib torrentfs
+
+	: # sources
+	src/$(SOURCES).cpp
+
+	: # requirements
+	<target-os>linux:<library>dl
+	<threading>multi
+	<library>/torrent//torrent/<boost-link>static/<link>static
+	<include>$(BOOST_ROOT)
+	<link>shared:<define>TORRENT_BUILDING_SHARED
+
+	: # default build
+	<link>static
+
+	: # usage requirements
+	<include>src
+	<library>/torrent//torrent/<boost-link>static/<link>static
+	<include>$(BOOST_ROOT)
+	<link>shared:<define>TORRENT_LINKING_SHARED
+
+	;
+
+exe btfs : src/btfs.cpp : <library>torrentfs/<link>static : <link>static ;
+
+explicit stage ;
+install stage : btfs : <location>. ;
+

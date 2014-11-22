@@ -1,0 +1,4 @@
+use-project /torrentfs : .. ;
+
+exe test_block_allocator : test_block_allocator.cpp : <library>/torrentfs//torrentfs ;
+
