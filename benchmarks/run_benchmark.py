@@ -28,7 +28,7 @@ if ret != 0:
 	sys.exit(1)
 
 # build the btfs tool
-ret = os.system('cd .. : b2 boost=source link=static -j4 stage')
+ret = os.system('(cd .. && b2 boost=source link=static -j4 stage)')
 if ret != 0:
 	print 'ERROR: building block_device_test failed: %d' % ret
 	sys.exit(1)
