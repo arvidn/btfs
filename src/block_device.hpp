@@ -37,7 +37,6 @@ namespace libtorrent
 
 using libtorrent::error_code;
 using libtorrent::file;
-using libtorrent::size_type;
 using libtorrent::sha1_hash;
 using libtorrent::bitfield;
 using libtorrent::mutex;
@@ -68,8 +67,8 @@ struct TORRENT_EXPORT block_device
 	block_device(std::string const& device_path, error_code& ec);
 	~block_device();
 
-	int preadv(void* inode, file::iovec_t const* iov, int nvec, size_type offset, error_code& ec);
-	int pwritev(void* inode, file::iovec_t const* iov, int nvec, size_type offset, error_code& ec);
+	int preadv(void* inode, file::iovec_t const* iov, int nvec, boost::int64_t offset, error_code& ec);
+	int pwritev(void* inode, file::iovec_t const* iov, int nvec, boost::int64_t offset, error_code& ec);
 
 	// returns true if there is an entry for this info-hash
 	bool exists(sha1_hash const& info_hash) const;
@@ -87,13 +86,13 @@ struct TORRENT_EXPORT block_device
 
 	// returns a rough estimate of how much free space there is on
 	// the device
-	size_type free_space() const;
+	boost::int64_t free_space() const;
 
 	struct fstatus
 	{
 		sha1_hash info_hash;
-		size_type file_size;
-		size_type allocated_size;
+		boost::int64_t file_size;
+		boost::int64_t allocated_size;
 	};
 
 	void stat(void* inode, fstatus* st) const;
@@ -123,11 +122,16 @@ struct TORRENT_EXPORT block_device
 
 private:
 
+	int preadv_impl(inode_block* blk, file::iovec_t const* iov, int nvec
+		, int file_block, int block_offset, error_code& ec);
+	int pwritev_impl(inode_block* blk, file::iovec_t const* iov, int nvec
+		, int file_block, int block_offset, error_code& ec);
+
 	void close_impl(inode_block* blk, mutex::scoped_lock& l);
 	void trim_blocks(boost::uint32_t* b, int num_blocks);
 
 	bool check_iop(inode_block* inode, file::iovec_t const* iov, int nvec
-		, size_type offset, error_code& ec) const;
+		, boost::int64_t offset, error_code& ec) const;
 	void read_inode(bitfield& used_blocks, sub_block_ref iblock, error_code& ec);
 
 	sub_block_ref allocate_inode(boost::uint64_t max_size, error_code& ec);

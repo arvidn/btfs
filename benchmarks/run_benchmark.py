@@ -39,7 +39,7 @@ if not os.path.exists('torrent_storage.img'):
 		print 'ERROR: dd failed: %d' % ret
 		sys.exit(1)
 
-ret = os.system('../btfs initialize 4194304 torrent_storage.img')
+ret = os.system('../btfs initialize 1048576 torrent_storage.img')
 if ret != 0:
 	print 'ERROR: btfs failed: %d' % ret
 	sys.exit(1)

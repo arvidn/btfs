@@ -1,6 +1,6 @@
 use-project /torrentfs : .. ;
 
-exe block_device_test : block_device_test.cpp : <library>/torrentfs//torrentfs/<disk-log>on ;
+exe block_device_test : block_device_test.cpp : <library>/torrentfs//torrentfs/<disk-log>on/<link>static ;
 
 explicit stage ;
 install stage : block_device_test : <location>. ;

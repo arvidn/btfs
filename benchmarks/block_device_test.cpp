@@ -43,7 +43,7 @@ int main(int argc, char *const argv[])
 	ses.set_alert_mask(~alert::progress_notification);
 	settings_pack s;
 	high_performance_seed(s);
-	s.set_int(settings_pack::cache_size, 65536); // 1 GB
+	s.set_int(settings_pack::cache_size, 131072); // 2 GB
 	s.set_int(settings_pack::listen_queue_size, 500);
 	s.set_int(settings_pack::alert_queue_size, 50000);
 //	s.set_bool(settings_pack::contiguous_recv_buffer, false);

@@ -165,7 +165,9 @@ int main(int argc, char* argv[])
 		{
 			if (strlen(argument[0]) != 40)
 			{
-				fprintf(stderr, "invalid filename argument; \"%s\". Expected 40 hex digits\n", argument[0]);
+				fprintf(stderr, "invalid filename argument; \"%s\". Expected 40 hex digits"
+					" len=%d\n"
+					, argument[0], int(strlen(argument[0])));
 				return 1;
 			}
 			if (!from_hex(argument[0], 40, (char*)&info_hash[0]))
@@ -243,7 +245,7 @@ int main(int argc, char* argv[])
 				char filebuf[4096];
 				memset(filebuf, 0, sizeof(filebuf));
 				file::iovec_t b = { filebuf, sizeof(filebuf) };
-				size_type offset = 0;
+				boost::int64_t offset = 0;
 				block_device::fstatus st;
 				dev.stat(inode, &st);
 				while (offset < st.file_size)
@@ -286,21 +288,33 @@ int main(int argc, char* argv[])
 						, argument[0], ec.message().c_str());
 					return 1;
 				}
-				char filebuf[4096];
-				memset(filebuf, 0, sizeof(filebuf));
-				file::iovec_t b = { filebuf, sizeof(filebuf) };
-				size_type offset = 0;
-				while (fread(filebuf, 1, sizeof(filebuf), input) > 0)
+				std::vector<char> filebuf(4 * 1024 * 1024);
+				int len = 0;
+				memset(&filebuf[0], 0, filebuf.size());
+				file::iovec_t b[2] = { { &filebuf[0], filebuf.size()/2}
+					, { &filebuf[filebuf.size()/2], filebuf.size()/2 } };
+
+				boost::int64_t offset = 0;
+				while ((len = fread(&filebuf[0], 1, filebuf.size(), input)) > 0)
 				{
-					dev.pwritev(inode, &b, 1, offset, ec);
+					if (len < filebuf.size()/2)
+					{
+						b[0].iov_len = len;
+						b[1].iov_len = 0;
+					}
+					else
+					{
+						b[1].iov_len = len - filebuf.size() / 2;
+					}
+
+					dev.pwritev(inode, b, 2, offset, ec);
 					if (ec)
 					{
 						fprintf(stderr, "error writing to file: \"%s\": %s\n"
 							, argument[0], ec.message().c_str());
 						break;
 					}
-					memset(filebuf, 0, sizeof(filebuf));
-					offset += sizeof(filebuf);
+					offset += filebuf.size();
 				}
 				fclose(input);
 				fprintf(stderr, "wrote %" PRId64 " bytes to \"%s\"\n", offset, argument[0]);

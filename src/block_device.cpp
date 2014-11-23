@@ -397,7 +397,7 @@ block_device::~block_device()
 void block_device::read_root_block(error_code& ec)
 {
 	TORRENT_ASSERT(!m_destructed);
-	aligned_holder root_block(m_media_block_size);
+	aligned_holder root_block((std::max)(m_media_block_size, boost::uint32_t(4096)));
 
 	file::iovec_t b = { root_block.get(), m_media_block_size };
 	int read = m_file.readv(0, &b, 1, ec);
@@ -593,7 +593,7 @@ void block_device::flush_inodes()
 		std::copy(blk->block_map.begin(), blk->block_map.end(), block->block_map);
 		l2.unlock();
 
-		size_type dev_offset = blk->block_index.device_offset(m_block_size);
+		boost::int64_t dev_offset = blk->block_index.device_offset(m_block_size);
 		file::iovec_t b = { &buffer[0], buffer.size()*4 };
 		error_code ec;
 		m_file.writev(dev_offset, &b, 1, ec);
@@ -874,9 +874,9 @@ void block_device::unlink(void* inode)
 
 // returns a rough estimate of how much free space there is on
 // the device
-size_type block_device::free_space() const
+boost::int64_t block_device::free_space() const
 {
-	return size_type(m_free_blocks.num_free()) * m_block_size;
+	return boost::int64_t(m_free_blocks.num_free()) * m_block_size;
 }
 
 void block_device::stat(void* inode, fstatus* st) const
@@ -887,8 +887,8 @@ void block_device::stat(void* inode, fstatus* st) const
 
 	TORRENT_ASSERT(blk->references > 0);
 
-	st->file_size = size_type(blk->block_map.size()) * m_block_size;
-	st->allocated_size = size_type(blk->blocks_in_use) * m_block_size;
+	st->file_size = boost::int64_t(blk->block_map.size()) * m_block_size;
+	st->allocated_size = boost::int64_t(blk->blocks_in_use) * m_block_size;
 	st->info_hash = blk->info_hash;
 }
 
@@ -905,8 +905,8 @@ void block_device::readdir(std::vector<fstatus>* dir) const
 		inode_block* blk = i->second;
 
 		fs.info_hash = blk->info_hash;
-		fs.file_size = size_type(blk->block_map.size()) * m_block_size;
-		fs.allocated_size = size_type(blk->blocks_in_use) * m_block_size;
+		fs.file_size = boost::int64_t(blk->block_map.size()) * m_block_size;
+		fs.allocated_size = boost::int64_t(blk->blocks_in_use) * m_block_size;
 	}
 }
 
@@ -953,7 +953,7 @@ void block_device::free_inode(sub_block_ref iblock)
 }
 
 bool block_device::check_iop(inode_block* inode, file::iovec_t const* iov, int nvec
-	, size_type offset, error_code& ec) const
+	, boost::int64_t offset, error_code& ec) const
 {
 	// negative number of iovecs is clearly invalid
 	if (nvec < 0)
@@ -962,8 +962,6 @@ bool block_device::check_iop(inode_block* inode, file::iovec_t const* iov, int n
 		return true;
 	}
 
-	int iop_size = bufs_size(iov, nvec);
-
 	// negative offsets are invalid
 	if (offset < 0)
 	{
@@ -971,17 +969,12 @@ bool block_device::check_iop(inode_block* inode, file::iovec_t const* iov, int n
 		return true;
 	}
 
-	// an IOP is not allowed to span multiple blocks
-	if ((offset % m_block_size) + iop_size > m_block_size)
-	{
-		ec.assign(boost::system::errc::invalid_argument, generic_category());
-		return true;
-	}
+	int iop_size = bufs_size(iov, nvec);
 
 	// files cannot be larger than block_size * block_map_size
 	// where block_map_size depends on how many 32 bit words
 	// fit in the inode_block, which is block_size - inode_header_size
-	if (offset + iop_size > size_type(inode->max_size) * m_block_size)
+	if (offset + iop_size > boost::uint64_t(inode->max_size) * m_block_size)
 	{
 		ec.assign(boost::system::errc::file_too_large, generic_category());
 		return true;
@@ -991,7 +984,7 @@ bool block_device::check_iop(inode_block* inode, file::iovec_t const* iov, int n
 }
 
 int block_device::preadv(void* inode, file::iovec_t const* iov, int nvec
-	, size_type offset, error_code& ec)
+	, boost::int64_t offset, error_code& ec)
 {
 	TORRENT_ASSERT(!m_destructed);
 	inode_block* blk = (inode_block*)inode;
@@ -1003,7 +996,50 @@ int block_device::preadv(void* inode, file::iovec_t const* iov, int nvec
 
 	// the block within the file address space
 	int file_block = offset / m_block_size;
+	int block_offset = offset % m_block_size;
 
+	int left_to_read= bufs_size(iov, nvec);
+	int read = 0;
+
+	while (left_to_read> 0)
+	{
+		const int to_read = (std::min)(int(m_block_size - block_offset)
+			, left_to_read);
+
+		int num_vecs = 0;
+		int c = to_read;
+		while (c > 0)
+		{
+			c -= iov[num_vecs].iov_len;
+			++num_vecs;
+		}
+
+		// the iovecs _must_ be divided up in a way that no individual buffer
+		// spans a block boundary. This should be the case in bittorrent
+		TORRENT_ASSERT(c == 0);
+		if (c != 0)
+		{
+			ec.assign(boost::system::errc::invalid_argument, generic_category());
+			return -1;
+		}
+
+		int ret = preadv_impl(blk, iov, num_vecs, file_block, block_offset, ec);
+		if (ret < 0) return -1;
+
+		block_offset = 0;
+		left_to_read -= to_read;
+		iov += num_vecs;
+		nvec -= num_vecs;
+		++file_block;
+		read += ret;
+	}
+
+	return read;
+}
+
+int block_device::preadv_impl(inode_block* blk, file::iovec_t const* iov, int nvec
+	, int file_block, int block_offset, error_code& ec)
+{
 	// the block index in the device address space
 	int device_block = block_allocator::unallocated_block;
 
@@ -1025,21 +1061,22 @@ int block_device::preadv(void* inode, file::iovec_t const* iov, int nvec
 		return ret;
 	}
 
-	size_type dev_offset = size_type(device_block) * m_block_size
-		+ (offset % m_block_size);
+	boost::int64_t dev_offset = boost::int64_t(device_block) * m_block_size
+		+ (block_offset);
 
 #if DISK_ACCESS_LOG
 	int id = write_disk_log(m_access_log, dev_offset, 0, start_read, time_now_hires());
 #endif
 	int ret = m_file.readv(dev_offset, iov, nvec, ec);
 #if DISK_ACCESS_LOG
-	write_disk_log(m_access_log, dev_offset + bufs_size(iov, nvec), id, complete_read, time_now_hires());
+	write_disk_log(m_access_log, dev_offset + bufs_size(iov, nvec), id
+		, complete_read, time_now_hires());
 #endif
 	return ret;
 }
 
 int block_device::pwritev(void* inode, file::iovec_t const* iov, int nvec
-	, size_type offset, error_code& ec)
+	, boost::int64_t offset, error_code& ec)
 {
 	TORRENT_ASSERT(!m_destructed);
 	inode_block* blk = (inode_block*)inode;
@@ -1051,6 +1088,53 @@ int block_device::pwritev(void* inode, file::iovec_t const* iov, int nvec
 
 	// the block within the file address space
 	int file_block = offset / m_block_size;
+	int block_offset = offset % m_block_size;
+
+	int left_to_write = bufs_size(iov, nvec);
+	int written = 0;
+
+	while (left_to_write > 0)
+	{
+		const int to_write = (std::min)(int(m_block_size - block_offset)
+			, left_to_write);
+
+		int num_vecs = 0;
+		int c = to_write;
+		while (c > 0)
+		{
+			c -= iov[num_vecs].iov_len;
+			++num_vecs;
+		}
+
+		// the iovecs _must_ be divided up in a way that no individual buffer
+		// spans a block boundary. This should be the case in bittorrent
+		TORRENT_ASSERT(c == 0);
+		if (c != 0)
+		{
+			ec.assign(boost::system::errc::invalid_argument, generic_category());
+			return -1;
+		}
+
+		int ret = pwritev_impl(blk, iov, num_vecs, file_block, block_offset, ec);
+		if (ret < 0) return -1;
+
+		block_offset = 0;
+		left_to_write -= to_write;
+		iov += num_vecs;
+		nvec -= num_vecs;
+		++file_block;
+
+		written += ret;
+	}
+
+	return written;
+}
+
+int block_device::pwritev_impl(inode_block* blk, file::iovec_t const* iov
+	, int nvec, int file_block, int block_offset, error_code& ec)
+{
+	// a single write is not allowed to span multiple blocks.
+	TORRENT_ASSERT(block_offset + bufs_size(iov, nvec) <= m_block_size);
 
 	// the block index in the device address space
 	int device_block = block_allocator::unallocated_block;
@@ -1127,8 +1211,8 @@ int block_device::pwritev(void* inode, file::iovec_t const* iov, int nvec
 
 	l.unlock();
 
-	size_type dev_offset = size_type(device_block) * m_block_size
-		+ (offset % m_block_size);
+	boost::int64_t dev_offset = boost::int64_t(device_block) * m_block_size
+		+ block_offset;
 
 #if DISK_ACCESS_LOG
 	int id = write_disk_log(m_access_log, dev_offset, 0, start_write, time_now_hires());
@@ -1168,26 +1252,28 @@ struct block_device_storage : libtorrent::storage_interface
 	virtual int readv(file::iovec_t const* bufs, int num_bufs
 		, int piece, int offset, int flags, storage_error& ec)
 	{
+		// TODO: m_inode needs mutex protection
 		if (m_inode == NULL)
 		{
 			m_inode = m_device->open(m_info_hash, m_total_size, ec.ec);
 			if (ec) return -1;
 		}
 
-		size_type toffset = size_type(piece) * m_piece_size + offset;
+		boost::int64_t toffset = boost::int64_t(piece) * m_piece_size + offset;
 		return m_device->preadv(m_inode, bufs, num_bufs, toffset, ec.ec);
 	}
 
 	virtual int writev(file::iovec_t const* bufs, int num_bufs
 		, int piece, int offset, int flags, storage_error& ec)
 	{
+		// TODO: m_inode needs mutex protection
 		if (m_inode == NULL)
 		{
 			m_inode = m_device->open(m_info_hash, m_total_size, ec.ec);
 			if (ec) return -1;
 		}
 
-		size_type toffset = size_type(piece) * m_piece_size + offset;
+		boost::int64_t toffset = boost::int64_t(piece) * m_piece_size + offset;
 		return m_device->pwritev(m_inode, bufs, num_bufs, toffset, ec.ec);
 	}
 
